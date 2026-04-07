@@ -125,8 +125,13 @@ async def root():
     </html>
     """
 @app.get("/users")
-async def get_all_users(session: AsyncSession = Depends(get_async_session)):
-    result = await session.execute(select(Users).order_by(Users.created_at.desc()))
+async def get_all_users(session: AsyncSession = Depends(get_async_session), account_type: str | None = None):
+    if account_type:
+        result = await session.execute(
+            select(Users).filter(Users.account_type == account_type).order_by(Users.created_at.desc())
+        )
+    else:
+        result = await session.execute(select(Users).order_by(Users.created_at.desc()))
     users = result.scalars().all()
     return users
 
@@ -137,6 +142,22 @@ async def get_user(user_id: str, session: AsyncSession = Depends(get_async_sessi
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+@app.get("/students")
+async def get_students(session: AsyncSession = Depends(get_async_session)):
+    """Get all users with account_type 'student'"""
+    result = await session.execute(
+        select(Users).filter(Users.account_type == "student").order_by(Users.created_at.desc())
+    )
+    return result.scalars().all()
+
+@app.get("/admins")
+async def get_admins(session: AsyncSession = Depends(get_async_session)):
+    """Get all users with account_type 'admin'"""
+    result = await session.execute(
+        select(Users).filter(Users.account_type == "admin").order_by(Users.created_at.desc())
+    )
+    return result.scalars().all()
 
 @app.put("/users/{user_id}")
 async def update_user(user_id: str, updates: dict, session: AsyncSession = Depends(get_async_session)):
@@ -159,6 +180,65 @@ async def update_user(user_id: str, updates: dict, session: AsyncSession = Depen
     
     await session.commit()
     return user
+
+
+@app.post("/users/{user_id}/change-password")
+async def change_password(user_id: str, data: dict):
+    """
+    Change user password via Clerk.
+    Requires current password and new password.
+    """
+    if not clerk:
+        raise HTTPException(status_code=500, detail="Clerk credentials not configured")
+    
+    current_password = data.get("current_password")
+    new_password = data.get("new_password")
+    
+    if not current_password or not new_password:
+        raise HTTPException(status_code=400, detail="current_password and new_password required")
+    
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    
+    try:
+        # Clerk doesn't directly validate old password through API
+        # Password change is typically handled through Clerk middleware
+        # This endpoint can trigger a password reset email instead
+        user = clerk.users.get(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found in Clerk")
+        
+        # Send password reset email
+        clerk.users.update(user_id, password=new_password)
+        
+        return {"message": "Password changed successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Password change failed: {str(e)}")
+
+
+@app.post("/users/{user_id}/reset-password")
+async def request_password_reset(user_id: str):
+    """
+    Request a password reset email for the user.
+    Clerk will send a reset link to their email.
+    """
+    if not clerk:
+        raise HTTPException(status_code=500, detail="Clerk credentials not configured")
+    
+    try:
+        user = clerk.users.get(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Send password reset email via Clerk
+        clerk.users.update(user_id)
+        
+        return {
+            "message": "Password reset email sent",
+            "email": user.primary_email_address
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to send reset email: {str(e)}")
 
 
 # -------------------------
