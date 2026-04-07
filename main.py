@@ -114,7 +114,7 @@ async def root():
             <div class="mt-12 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
                 <div class="flex items-center space-x-2">
                     <span class="w-1.5 h-1.5 bg-zinc-700 rounded-full"></span>
-                    <span>© 2026 USTP CAPSTONE</span>
+                    <span>© 2026 USTP APPDEV</span>
                 </div>
                 <span class="flex items-center">
                     Engineered by: <span class="text-orange-500 ml-2">IT3R1</span> 
