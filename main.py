@@ -7,6 +7,7 @@ from sqlalchemy.future import select
 import os
 from svix.webhooks import Webhook
 from clerk_backend_api import Clerk
+from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="OSA Service Portal API")
 
@@ -20,10 +21,109 @@ app.add_middleware(
 
 clerk = Clerk(bearer_auth=os.getenv("CLERK_SECRET_KEY"))
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    return {"message": "API is running"}
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>OSA Service Server | USTP</title>
+        <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/3hird-K/osa-service-portal/with-fastapi/assets/osa.png">
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            body { font-family: 'Inter', sans-serif; background-color: #09090b; }
+            .orange-glow { box-shadow: 0 0 20px rgba(249, 115, 22, 0.1); }
+            .accent-orange { color: #f97316; }
+            .bg-orange-main { background-color: #f97316; }
+            .border-card { border-color: #18181b; }
+        </style>
+    </head>
+    <body class="text-zinc-400 min-h-screen flex items-center justify-center p-6">
+        <div class="max-w-xl w-full">
+            <div class="mb-10">
+                <div class="flex items-center justify-between mb-6">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 rounded bg-orange-main flex items-center justify-center text-white font-bold orange-glow">
+                            O
+                        </div>
+                        <div>
+                            <h2 class="text-zinc-100 font-semibold tracking-tight uppercase text-xs">Osa Service Portal</h2>
+                            <p class="text-[10px] text-zinc-500 font-bold tracking-[0.2em] uppercase">System Backend</p>
+                        </div>
+                    </div>
+                    <img src="https://raw.githubusercontent.com/3hird-K/osa-service-portal/with-fastapi/assets/ustp.png" 
+                         alt="USTP Logo" class="h-12 w-auto opacity-80 hover:opacity-100 transition-opacity">
+                </div>
+                
+                <h1 class="text-3xl font-bold text-zinc-100 tracking-tight">
+                    Backend <span class="accent-orange">Service Engine</span>
+                </h1>
+                <p class="text-zinc-500 text-sm mt-1 font-medium">University of Science and Technology of Southern Philippines</p>
+            </div>
 
+            <div class="grid grid-cols-2 gap-4 mb-6">
+                <div class="bg-[#121214] border border-card p-5 rounded-2xl">
+                    <div class="flex items-center space-x-2 mb-3">
+                        <div class="w-2 h-2 bg-green-500 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse"></div>
+                        <span class="text-[10px] uppercase font-bold tracking-widest text-zinc-500">API Status</span>
+                    </div>
+                    <p class="text-xl font-bold text-zinc-100 tracking-tight text-white">Operational</p>
+                    <p class="text-[10px] text-green-500 font-medium mt-1">Ready for Requests</p>
+                </div>
+                <div class="bg-[#121214] border border-card p-5 rounded-2xl">
+                    <div class="flex items-center space-x-2 mb-3 text-zinc-500">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        <span class="text-[10px] uppercase font-bold tracking-widest text-zinc-500">Environment</span>
+                    </div>
+                    <p class="text-xl font-bold text-zinc-100 tracking-tight text-white">Production</p>
+                    <p class="text-[10px] text-orange-500 font-medium mt-1">Neon + Render</p>
+                </div>
+            </div>
+
+            <div class="bg-[#121214] border border-card rounded-2xl overflow-hidden">
+                <a href="/docs" class="flex items-center justify-between p-4 hover:bg-zinc-800/50 transition-all border-b border-card group">
+                    <div class="flex items-center space-x-4">
+                        <div class="p-2 bg-zinc-900 rounded-lg text-orange-500 group-hover:bg-orange-500 group-hover:text-white transition-all">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-zinc-100">Swagger UI</p>
+                            <p class="text-xs text-zinc-500 uppercase tracking-tighter">Interactive API Docs</p>
+                        </div>
+                    </div>
+                    <svg class="w-4 h-4 text-zinc-600 group-hover:text-orange-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </a>
+                
+                <a href="/redoc" class="flex items-center justify-between p-4 hover:bg-zinc-800/50 transition-all group">
+                    <div class="flex items-center space-x-4">
+                        <div class="p-2 bg-zinc-900 rounded-lg text-zinc-500 group-hover:bg-zinc-100 group-hover:text-black transition-all">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-zinc-100">Redoc Schema</p>
+                            <p class="text-xs text-zinc-500 uppercase tracking-tighter">Static Documentation</p>
+                        </div>
+                    </div>
+                    <svg class="w-4 h-4 text-zinc-600 group-hover:text-white transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </a>
+            </div>
+
+            <div class="mt-12 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+                <div class="flex items-center space-x-2">
+                    <span class="w-1.5 h-1.5 bg-zinc-700 rounded-full"></span>
+                    <span>© 2026 USTP CAPSTONE</span>
+                </div>
+                <span class="flex items-center">
+                    Engineered by: <span class="text-orange-500 ml-2">IT3R1</span> 
+                </span>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 @app.get("/users")
 async def get_all_users(session: AsyncSession = Depends(get_async_session)):
     result = await session.execute(select(Users).order_by(Users.created_at.desc()))
