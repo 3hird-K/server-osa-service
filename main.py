@@ -61,6 +61,132 @@ async def update_user(user_id: str, updates: dict, session: AsyncSession = Depen
     return user
 
 
+# -------------------------
+# /profiles endpoints (alias to /users for frontend compatibility)
+# -------------------------
+
+@app.get("/profiles")
+async def get_all_profiles(session: AsyncSession = Depends(get_async_session)):
+    """Fetch all user profiles from Neon DB"""
+    result = await session.execute(select(Users).order_by(Users.created_at.desc()))
+    users = result.scalars().all()
+    return users
+
+
+@app.get("/profiles/{user_id}")
+async def get_profile(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Fetch a single user profile from Neon DB"""
+    result = await session.execute(select(Users).filter(Users.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.put("/profiles/{user_id}")
+async def update_profile(user_id: str, updates: dict, session: AsyncSession = Depends(get_async_session)):
+    """Update user profile in Neon DB"""
+    result = await session.execute(select(Users).filter(Users.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update allowed fields
+    allowed_fields = ["firstname", "lastname", "account_type", "avatar_url"]
+    
+    # Validate account_type if being updated
+    if "account_type" in updates:
+        if updates["account_type"] not in ["student", "admin"]:
+            raise HTTPException(status_code=400, detail="account_type must be 'student' or 'admin'")
+    
+    for field, value in updates.items():
+        if field in allowed_fields:
+            setattr(user, field, value)
+    
+    await session.commit()
+    return user
+
+
+# -------------------------
+# Manual sync endpoint - useful if webhook doesn't fire
+# -------------------------
+
+@app.post("/sync-user/{user_id}")
+async def sync_user_from_clerk(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """
+    Manually sync a Clerk user to Neon DB if webhook hasn't fired yet.
+    This endpoint fetches the user from Clerk and creates/updates in Neon.
+    """
+    try:
+        # Fetch user from Clerk
+        clerk_user = clerk.users.get(user_id)
+        
+        # Extract user data
+        first_name = clerk_user.first_name or ""
+        last_name = clerk_user.last_name or ""
+        avatar_url = clerk_user.image_url or ""
+        username = clerk_user.username
+        
+        # Get primary email
+        email = None
+        if clerk_user.email_addresses:
+            for email_obj in clerk_user.email_addresses:
+                if email_obj.verification and email_obj.verification.status == "verified":
+                    email = email_obj.email_address
+                    break
+            if not email:
+                email = clerk_user.email_addresses[0].email_address
+        
+        # Get account type from public_metadata
+        public_metadata = clerk_user.public_metadata or {}
+        account_type = public_metadata.get("role", "student")
+        if account_type not in ["student", "admin"]:
+            account_type = "student"
+        
+        # Check if user exists
+        result = await session.execute(select(Users).where(Users.id == user_id))
+        existing_user = result.scalars().first()
+        
+        if existing_user:
+            # Update existing user
+            existing_user.firstname = first_name
+            existing_user.lastname = last_name
+            existing_user.email = email
+            existing_user.avatar_url = avatar_url
+            if username:
+                existing_user.username = username
+            existing_user.account_type = account_type
+            await session.commit()
+            print(f"✅ User synced (updated) in Neon DB: {user_id}")
+            return {"message": "User synced (updated)", "user_id": user_id, "status": "updated"}
+        else:
+            # Create new user
+            username_value = username
+            if not username_value and email:
+                username_value = email.split("@")[0]
+            if not username_value:
+                username_value = f"user_{user_id[-8:]}"
+            
+            new_user = Users(
+                id=user_id,
+                firstname=first_name,
+                lastname=last_name,
+                email=email,
+                avatar_url=avatar_url,
+                username=username_value,
+                account_type=account_type,
+            )
+            session.add(new_user)
+            await session.commit()
+            print(f"✅ User synced (created) in Neon DB: {user_id}")
+            return {"message": "User synced (created)", "user_id": user_id, "status": "created"}
+            
+    except Exception as e:
+        await session.rollback()
+        print(f"❌ Error syncing user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to sync user: {str(e)}")
+
+
 @app.post("/api/webhooks/clerk")
 async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_async_session)):
 
@@ -120,49 +246,79 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
     # -------------------------
 
     if event_type == "user.created":
+        try:
+            # Generate username fallback if not provided
+            username_value = username
+            if not username_value and email:
+                username_value = email.split("@")[0]
+            if not username_value:
+                username_value = f"user_{user_id[-8:]}"
 
-        new_user = Users(
-            id=user_id,
-            firstname=first_name,
-            lastname=last_name,
-            email=email,
-            avatar_url=avatar_url,
-            username=username or email.split("@")[0],  # fallback
-            account_type=account_type,  # From Clerk public_metadata or default "student"
-        )
+            new_user = Users(
+                id=user_id,
+                firstname=first_name,
+                lastname=last_name,
+                email=email,
+                avatar_url=avatar_url,
+                username=username_value,
+                account_type=account_type,  # From Clerk public_metadata or default "student"
+            )
 
-        session.add(new_user)
-        await session.commit()
+            session.add(new_user)
+            await session.commit()
+            print(f"✅ User created in Neon DB: {user_id}")
+
+        except Exception as e:
+            await session.rollback()
+            print(f"❌ Error creating user {user_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
 
     elif event_type == "user.updated":
+        try:
+            result = await session.execute(
+                select(Users).where(Users.id == user_id)
+            )
+            existing_user = result.scalars().first()
 
-        result = await session.execute(
-            select(Users).where(Users.id == user_id)
-        )
-        existing_user = result.scalars().first()
+            if existing_user:
+                existing_user.firstname = first_name
+                existing_user.lastname = last_name
+                existing_user.email = email
+                existing_user.avatar_url = avatar_url
+                if username:
+                    existing_user.username = username
+                existing_user.account_type = account_type  # Update from Clerk public_metadata
 
-        if existing_user:
-            existing_user.firstname = first_name
-            existing_user.lastname = last_name
-            existing_user.email = email
-            existing_user.avatar_url = avatar_url
-            existing_user.username = username or existing_user.username
-            existing_user.account_type = account_type  # Update from Clerk public_metadata
+                await session.commit()
+                print(f"✅ User updated in Neon DB: {user_id}")
+            else:
+                print(f"⚠️  User not found for update: {user_id}")
 
-            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            print(f"❌ Error updating user {user_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
 
     elif event_type == "user.deleted":
+        try:
+            result = await session.execute(
+                select(Users).where(Users.id == user_id)
+            )
+            user = result.scalars().first()
 
-        result = await session.execute(
-            select(Users).where(Users.id == user_id)
-        )
-        user = result.scalars().first()
+            if user:
+                await session.delete(user)
+                await session.commit()
+                print(f"✅ User deleted from Neon DB: {user_id}")
+            else:
+                print(f"⚠️  User not found for deletion: {user_id}")
 
-        if user:
-            await session.delete(user)
-            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            print(f"❌ Error deleting user {user_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
 
-    return {"message": "Webhook processed"}
+    return {"message": f"Webhook processed - event: {event_type}"}
 
 # @app.post("/api/webhooks/clerk")
 # async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_async_session)):
