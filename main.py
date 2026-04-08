@@ -204,9 +204,6 @@ async def change_password(user_id: str, data: dict):
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
     
     try:
-        # Clerk doesn't directly validate old password through API
-        # Password change is typically handled through Clerk middleware
-        # This endpoint can trigger a password reset email instead
         user = clerk.users.get(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found in Clerk")
@@ -233,7 +230,6 @@ async def request_password_reset(user_id: str):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Send password reset email via Clerk
         clerk.users.update(user_id)
         
         return {
@@ -244,9 +240,6 @@ async def request_password_reset(user_id: str):
         raise HTTPException(status_code=400, detail=f"Failed to send reset email: {str(e)}")
 
 
-# -------------------------
-# /profiles endpoints (alias to /users for frontend compatibility)
-# -------------------------
 
 @app.get("/profiles")
 async def get_all_profiles(session: AsyncSession = Depends(get_async_session)):
@@ -289,10 +282,6 @@ async def update_profile(user_id: str, updates: dict, session: AsyncSession = De
     await session.commit()
     return user
 
-
-# -------------------------
-# Manual sync endpoint - useful if webhook doesn't fire
-# -------------------------
 
 @app.post("/sync-user/{user_id}")
 async def sync_user_from_clerk(user_id: str, session: AsyncSession = Depends(get_async_session)):
@@ -340,7 +329,7 @@ async def sync_user_from_clerk(user_id: str, session: AsyncSession = Depends(get
                 existing_user.username = username
             existing_user.account_type = account_type
             await session.commit()
-            print(f"✅ User synced (updated) in Neon DB: {user_id}")
+            print(f"User synced (updated) in Neon DB: {user_id}")
             return {"message": "User synced (updated)", "user_id": user_id, "status": "updated"}
         else:
             # Create new user
@@ -361,12 +350,12 @@ async def sync_user_from_clerk(user_id: str, session: AsyncSession = Depends(get
             )
             session.add(new_user)
             await session.commit()
-            print(f"✅ User synced (created) in Neon DB: {user_id}")
+            print(f"User synced (created) in Neon DB: {user_id}")
             return {"message": "User synced (created)", "user_id": user_id, "status": "created"}
             
     except Exception as e:
         await session.rollback()
-        print(f"❌ Error syncing user {user_id}: {str(e)}")
+        print(f"Error syncing user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to sync user: {str(e)}")
 
 
@@ -424,9 +413,7 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
     if not email and email_addresses:
         email = email_addresses[0].get("email_address")
 
-    # -------------------------
-    # HANDLE EVENTS
-    # -------------------------
+
 
     if event_type == "user.created":
         try:
@@ -502,78 +489,3 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
             raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
 
     return {"message": f"Webhook processed - event: {event_type}"}
-
-# @app.post("/api/webhooks/clerk")
-# async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_async_session)):
-#     # Get the Svix headers
-#     headers = request.headers
-#     svix_id = headers.get("svix-id")
-#     svix_timestamp = headers.get("svix-timestamp")
-#     svix_signature = headers.get("svix-signature")
-
-#     if not svix_id or not svix_timestamp or not svix_signature:
-#         raise HTTPException(status_code=400, detail="Missing Svix headers")
-
-#     payload = await request.body()
-#     secret = os.getenv("CLERK_WEBHOOK_SECRET")
-    
-#     if not secret:
-#         raise HTTPException(status_code=500, detail="Webhook secret not configured")
-
-#     webhook = Webhook(secret)
-#     try:
-#         event = webhook.verify(payload, {
-#             "svix-id": svix_id,
-#             "svix-timestamp": svix_timestamp,
-#             "svix-signature": svix_signature,
-#         })
-#     except Exception as e:
-#         raise HTTPException(status_code=400, detail="Invalid signature")
-
-#     # Handle the event
-#     event_type = event["type"]
-#     if event_type == "user.created" or event_type == "user.updated":
-#         data = event["data"]
-#         user_id = data.get("id")
-#         first_name = data.get("first_name", "")
-#         last_name = data.get("last_name", "")
-#         avatar_url = data.get("image_url", "")
-        
-#         # Extract primary email from email_addresses array
-#         email = None
-#         email_addresses = data.get("email_addresses", [])
-#         if email_addresses:
-#             # Find primary email or use first email
-#             for email_obj in email_addresses:
-#                 if email_obj.get("verification") and email_obj["verification"].get("status") == "verified":
-#                     email = email_obj.get("email_address")
-#                     break
-#             if not email and email_addresses:
-#                 email = email_addresses[0].get("email_address")
-        
-#         # Sync to Users table with default account_type="student"
-#         if email:
-#             result = await session.execute(select(Users).filter(Users.id == user_id))
-#             existing_user = result.scalars().first()
-            
-#             if existing_user:
-#                 existing_user.firstname = first_name
-#                 existing_user.lastname = last_name
-#                 existing_user.email = email
-#                 existing_user.avatar_url = avatar_url
-#                 # Keep existing account_type unless explicitly changed
-#             else:
-#                 new_user = Users(
-#                     id=user_id,
-#                     firstname=first_name,
-#                     lastname=last_name,
-#                     email=email,
-#                     avatar_url=avatar_url,
-#                     username=email.split("@")[0],  # Generate username from email
-#                     account_type="student"  # Default account type
-#                 )
-#                 session.add(new_user)
-            
-#         await session.commit()
-        
-#     return {"message": "Webhook processed successfully"}
