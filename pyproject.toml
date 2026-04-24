@@ -1,7 +1,7 @@
 [project]
 name = "fast-api-clerk"
 version = "0.1.0"
-description = "Add your description here"
+description = "Server OSA Service"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

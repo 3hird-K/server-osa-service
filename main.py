@@ -8,8 +8,17 @@ import os
 from svix.webhooks import Webhook
 from clerk_backend_api import Clerk
 from fastapi.responses import HTMLResponse
+from fastapi.openapi.docs import get_swagger_ui_html
 
-app = FastAPI(title="OSA Service Portal API")
+    
+
+# app = FastAPI(title="OSA Service Portal API")
+app = FastAPI(
+    title="OSA Service Portal API",
+    docs_url=None, # This prevents FastAPI from trying to serve its own /docs
+    swagger_ui_parameters={"defaultModelsExpandDepth": 1}
+)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,6 +33,70 @@ app.add_middleware(
 )
 
 clerk = Clerk(bearer_auth=os.getenv("CLERK_SECRET_KEY"))
+
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    # 1. Get the standard UI HTML
+    response = get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=app.title + " - Swagger UI",
+        oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+    )
+
+    dark_styles = """
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-themes@3.0.1/themes/3.x/theme-dracula.css">
+    <style>
+        /* Base Backgrounds */
+        body, .swagger-ui { background-color: #09090b !important; }
+        .swagger-ui .topbar { display: none; }
+        
+        /* Headers & Branding */
+        .swagger-ui .info .title { color: #f97316 !important; }
+        .swagger-ui .opblock-tag { color: #eeeeee !important; border-bottom: 1px solid #18181b !important; }
+        
+        /* Fix the "Internal" Section Headers (Parameters, Responses, etc.) */
+        .swagger-ui .opblock-section-header { 
+            background: #18181b !important; 
+            color: #ffffff !important; 
+        }
+        .swagger-ui .opblock-section-header h4 { color: #ffffff !important; }
+        
+        /* Table & Parameter Headers */
+        .swagger-ui table thead tr td, 
+        .swagger-ui table thead tr th { 
+            color: #f97316 !important; 
+            border-bottom: 1px solid #27272a !important; 
+        }
+        
+        /* Text Contrast Fixes */
+        .swagger-ui .opblock .opblock-summary-description,
+        .swagger-ui .tabli button,
+        .swagger-ui .response-col_status,
+        .swagger-ui .response-col_links { 
+            color: #d4d4d8 !important; 
+        }
+        
+        /* Button Styling to match OSA */
+        .swagger-ui .btn.execute { 
+            background-color: #f97316 !important; 
+            border-color: #f97316 !important; 
+            color: white !important; 
+        }
+        
+        /* Individual API Row Backgrounds */
+        .swagger-ui .opblock { background: #121214 !important; border: 1px solid #1c1c21 !important; }
+        .swagger-ui .opblock .opblock-summary { background: #121214 !important; }
+    </style>
+    """
+    
+    # 3. Inject the styles into the HTML head
+    html_content = response.body.decode("utf-8")
+    html_content = html_content.replace("</head>", f"{dark_styles}</head>")
+    
+    return HTMLResponse(content=html_content)
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -128,6 +201,8 @@ async def root():
     </body>
     </html>
     """
+
+
 @app.get("/users")
 async def get_all_users(session: AsyncSession = Depends(get_async_session), account_type: str | None = None):
     if account_type:
@@ -186,61 +261,6 @@ async def update_user(user_id: str, updates: dict, session: AsyncSession = Depen
     return user
 
 
-@app.post("/users/{user_id}/change-password")
-async def change_password(user_id: str, data: dict):
-    """
-    Change user password via Clerk.
-    Requires current password and new password.
-    """
-    if not clerk:
-        raise HTTPException(status_code=500, detail="Clerk credentials not configured")
-    
-    current_password = data.get("current_password")
-    new_password = data.get("new_password")
-    
-    if not current_password or not new_password:
-        raise HTTPException(status_code=400, detail="current_password and new_password required")
-    
-    if len(new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
-    
-    try:
-        user = clerk.users.get(user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found in Clerk")
-        
-        # Send password reset email
-        clerk.users.update(user_id, password=new_password)
-        
-        return {"message": "Password changed successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Password change failed: {str(e)}")
-
-
-@app.post("/users/{user_id}/reset-password")
-async def request_password_reset(user_id: str):
-    """
-    Request a password reset email for the user.
-    Clerk will send a reset link to their email.
-    """
-    if not clerk:
-        raise HTTPException(status_code=500, detail="Clerk credentials not configured")
-    
-    try:
-        user = clerk.users.get(user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        clerk.users.update(user_id)
-        
-        return {
-            "message": "Password reset email sent",
-            "email": user.primary_email_address
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to send reset email: {str(e)}")
-
-
 
 @app.get("/profiles")
 async def get_all_profiles(session: AsyncSession = Depends(get_async_session)):
@@ -282,82 +302,6 @@ async def update_profile(user_id: str, updates: dict, session: AsyncSession = De
     
     await session.commit()
     return user
-
-
-@app.post("/sync-user/{user_id}")
-async def sync_user_from_clerk(user_id: str, session: AsyncSession = Depends(get_async_session)):
-    """
-    Manually sync a Clerk user to Neon DB if webhook hasn't fired yet.
-    This endpoint fetches the user from Clerk and creates/updates in Neon.
-    """
-    try:
-        # Fetch user from Clerk
-        clerk_user = clerk.users.get(user_id)
-        
-        # Extract user data
-        first_name = clerk_user.first_name or ""
-        last_name = clerk_user.last_name or ""
-        avatar_url = clerk_user.image_url or ""
-        username = clerk_user.username
-        
-        # Get primary email
-        email = None
-        if clerk_user.email_addresses:
-            for email_obj in clerk_user.email_addresses:
-                if email_obj.verification and email_obj.verification.status == "verified":
-                    email = email_obj.email_address
-                    break
-            if not email:
-                email = clerk_user.email_addresses[0].email_address
-        
-        # Get account type from public_metadata
-        public_metadata = clerk_user.public_metadata or {}
-        account_type = public_metadata.get("role", "student")
-        if account_type not in ["student", "admin"]:
-            account_type = "student"
-        
-        # Check if user exists
-        result = await session.execute(select(Users).where(Users.id == user_id))
-        existing_user = result.scalars().first()
-        
-        if existing_user:
-            # Update existing user
-            existing_user.firstname = first_name
-            existing_user.lastname = last_name
-            existing_user.email = email
-            existing_user.avatar_url = avatar_url
-            if username:
-                existing_user.username = username
-            existing_user.account_type = account_type
-            await session.commit()
-            print(f"User synced (updated) in Neon DB: {user_id}")
-            return {"message": "User synced (updated)", "user_id": user_id, "status": "updated"}
-        else:
-            # Create new user
-            username_value = username
-            if not username_value and email:
-                username_value = email.split("@")[0]
-            if not username_value:
-                username_value = f"user_{user_id[-8:]}"
-            
-            new_user = Users(
-                id=user_id,
-                firstname=first_name,
-                lastname=last_name,
-                email=email,
-                avatar_url=avatar_url,
-                username=username_value,
-                account_type=account_type,
-            )
-            session.add(new_user)
-            await session.commit()
-            print(f"User synced (created) in Neon DB: {user_id}")
-            return {"message": "User synced (created)", "user_id": user_id, "status": "created"}
-            
-    except Exception as e:
-        await session.rollback()
-        print(f"Error syncing user {user_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to sync user: {str(e)}")
 
 
 @app.post("/api/webhooks/clerk")
@@ -437,11 +381,11 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
 
             session.add(new_user)
             await session.commit()
-            print(f"✅ User created in Neon DB: {user_id}")
+            print(f"User created in Neon DB: {user_id}")
 
         except Exception as e:
             await session.rollback()
-            print(f"❌ Error creating user {user_id}: {str(e)}")
+            print(f"Error creating user {user_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
 
     elif event_type == "user.updated":
@@ -461,13 +405,13 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
                 existing_user.account_type = account_type  # Update from Clerk public_metadata
 
                 await session.commit()
-                print(f"✅ User updated in Neon DB: {user_id}")
+                print(f"User updated in Neon DB: {user_id}")
             else:
-                print(f"⚠️  User not found for update: {user_id}")
+                print(f"User not found for update: {user_id}")
 
         except Exception as e:
             await session.rollback()
-            print(f"❌ Error updating user {user_id}: {str(e)}")
+            print(f"Error updating user {user_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
 
     elif event_type == "user.deleted":
@@ -480,13 +424,13 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
             if user:
                 await session.delete(user)
                 await session.commit()
-                print(f"✅ User deleted from Neon DB: {user_id}")
+                print(f"User deleted from Neon DB: {user_id}")
             else:
-                print(f"⚠️  User not found for deletion: {user_id}")
+                print(f"User not found for deletion: {user_id}")
 
         except Exception as e:
             await session.rollback()
-            print(f"❌ Error deleting user {user_id}: {str(e)}")
+            print(f"Error deleting user {user_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
 
     return {"message": f"Webhook processed - event: {event_type}"}
