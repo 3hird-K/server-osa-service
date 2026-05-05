@@ -224,7 +224,19 @@ async def get_user(user_id: str, session: AsyncSession = Depends(get_async_sessi
 
 @app.get("/students")
 async def get_students(session: AsyncSession = Depends(get_async_session)):
-    """Get all users with account_type 'student'"""
+    """Get all users with account_type 'student' (Clean up stale users first)"""
+    import datetime
+    from sqlalchemy import update
+    
+    # Silent background cleanup
+    two_minutes_ago = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
+    await session.execute(
+        update(Users)
+        .where(Users.last_active < two_minutes_ago)
+        .values(is_online=False)
+    )
+    await session.commit()
+
     result = await session.execute(
         select(Users).filter(Users.account_type == "student").order_by(Users.created_at.desc())
     )
@@ -232,11 +244,33 @@ async def get_students(session: AsyncSession = Depends(get_async_session)):
 
 @app.get("/admins")
 async def get_admins(session: AsyncSession = Depends(get_async_session)):
-    """Get all users with account_type 'admin'"""
+    """Get all users with account_type 'admin' (Clean up stale users first)"""
+    import datetime
+    from sqlalchemy import update
+    
+    # Silent background cleanup
+    two_minutes_ago = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
+    await session.execute(
+        update(Users)
+        .where(Users.last_active < two_minutes_ago)
+        .values(is_online=False)
+    )
+    await session.commit()
+
     result = await session.execute(
         select(Users).filter(Users.account_type == "admin").order_by(Users.created_at.desc())
     )
     return result.scalars().all()
+
+@app.post("/users/{user_id}/logout")
+async def user_logout(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Explicitly mark user as offline on logout"""
+    result = await session.execute(select(Users).filter(Users.id == user_id))
+    user = result.scalars().first()
+    if user:
+        user.is_online = False
+        await session.commit()
+    return {"status": "success"}
 
 @app.put("/users/{user_id}")
 async def update_user(user_id: str, updates: dict, session: AsyncSession = Depends(get_async_session)):
