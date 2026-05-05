@@ -260,6 +260,32 @@ async def update_user(user_id: str, updates: dict, session: AsyncSession = Depen
     await session.commit()
     return user
 
+@app.post("/users/{user_id}/heartbeat")
+async def user_heartbeat(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Update user's online status and last active timestamp"""
+    result = await session.execute(select(Users).filter(Users.id == user_id))
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    import datetime
+    user.is_online = True
+    user.last_active = datetime.datetime.utcnow()
+    
+    # Optional: Mark others as offline if they haven't pinged in 2 minutes
+    # This keeps the "green dots" accurate across the whole system
+    two_minutes_ago = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
+    from sqlalchemy import update
+    await session.execute(
+        update(Users)
+        .where(Users.last_active < two_minutes_ago)
+        .values(is_online=False)
+    )
+    
+    await session.commit()
+    return {"status": "active", "user_id": user_id}
+
 
 
 @app.get("/profiles")

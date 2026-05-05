@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Enum
+from sqlalchemy import Column, String, DateTime, Enum, Boolean
 from database import Base
 import datetime
 import enum
@@ -18,6 +18,8 @@ class Users(Base):
     account_type = Column(String, default="student", nullable=False)
     avatar_url = Column(String, nullable=True)
     password_hash = Column(String, nullable=True)
+    is_online = Column(Boolean, default=False)
+    last_active = Column(DateTime, default=datetime.datetime.utcnow)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
