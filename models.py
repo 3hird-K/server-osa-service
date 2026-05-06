@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, DateTime, Enum, Boolean
+from sqlalchemy import Column, String, DateTime, Enum, Boolean, ForeignKey
+from sqlalchemy.orm import relationship
 from database import Base
 import datetime
 import enum
@@ -22,4 +23,19 @@ class Users(Base):
     last_active = Column(DateTime, default=datetime.datetime.utcnow)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class Tasks(Base):
+    __tablename__ = "tasks"
+
+    id = Column(String, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    status = Column(String, default="Pending") # Pending, In Progress, Completed
+    assigned_to = Column(String, ForeignKey("users.id"), nullable=True)
+    location = Column(String, nullable=True)
+    hours = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    assignee = relationship("Users", foreign_keys=[assigned_to])
 

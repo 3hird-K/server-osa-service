@@ -1,10 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from database import get_async_session, engine, Base
-from models import Users
+from models import Users, Tasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import delete
+from sqlalchemy.orm import selectinload
 import os
+import uuid
 from svix.webhooks import Webhook
 from clerk_backend_api import Clerk
 from fastapi.responses import HTMLResponse
@@ -496,3 +499,75 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
             raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
 
     return {"message": f"Webhook processed - event: {event_type}"}
+ 
+ 
+ # --- TASK CRUD ENDPOINTS ---
+ 
+@app.get("/tasks")
+async def get_all_tasks(session: AsyncSession = Depends(get_async_session)):
+     """Fetch all tasks from Neon DB with assignee details"""
+     result = await session.execute(
+         select(Tasks).options(selectinload(Tasks.assignee)).order_by(Tasks.created_at.desc())
+     )
+     tasks = result.scalars().all()
+     return tasks
+ 
+@app.get("/tasks/{task_id}")
+async def get_task(task_id: str, session: AsyncSession = Depends(get_async_session)):
+     """Fetch a single task by ID with assignee details"""
+     result = await session.execute(
+         select(Tasks).options(selectinload(Tasks.assignee)).filter(Tasks.id == task_id)
+     )
+     task = result.scalars().first()
+     if not task:
+         raise HTTPException(status_code=404, detail="Task not found")
+     return task
+ 
+@app.post("/tasks")
+async def create_task(task_data: dict, session: AsyncSession = Depends(get_async_session)):
+     """Create a new task in Neon DB"""
+     try:
+         task_id = f"TSK-{str(uuid.uuid4())[:8].upper()}"
+         new_task = Tasks(
+             id=task_id,
+             title=task_data.get("title"),
+             description=task_data.get("description"),
+             status=task_data.get("status", "Pending"),
+             assigned_to=task_data.get("assigned_to"),
+             location=task_data.get("location"),
+             hours=task_data.get("hours")
+         )
+         session.add(new_task)
+         await session.commit()
+         return new_task
+     except Exception as e:
+         await session.rollback()
+         raise HTTPException(status_code=500, detail=f"Failed to create task: {str(e)}")
+ 
+@app.put("/tasks/{task_id}")
+async def update_task(task_id: str, updates: dict, session: AsyncSession = Depends(get_async_session)):
+     """Update a task in Neon DB"""
+     result = await session.execute(select(Tasks).filter(Tasks.id == task_id))
+     task = result.scalars().first()
+     if not task:
+         raise HTTPException(status_code=404, detail="Task not found")
+     
+     allowed_fields = ["title", "description", "status", "assigned_to", "location", "hours"]
+     for field, value in updates.items():
+         if field in allowed_fields:
+             setattr(task, field, value)
+     
+     await session.commit()
+     return task
+ 
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: str, session: AsyncSession = Depends(get_async_session)):
+     """Delete a task from Neon DB"""
+     result = await session.execute(select(Tasks).filter(Tasks.id == task_id))
+     task = result.scalars().first()
+     if not task:
+         raise HTTPException(status_code=404, detail="Task not found")
+     
+     await session.delete(task)
+     await session.commit()
+     return {"status": "success", "message": f"Task {task_id} deleted"}
