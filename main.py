@@ -691,3 +691,27 @@ async def update_timelog(log_id: str, updates: dict, session: AsyncSession = Dep
     await session.commit()
     await session.refresh(log)
     return log
+
+@app.delete("/timelogs/{log_id}")
+async def delete_timelog(log_id: str, user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Delete a time log if the task is not yet completed and it belongs to the user"""
+    result = await session.execute(select(TimeLogs).filter(TimeLogs.id == log_id))
+    log = result.scalars().first()
+    
+    if not log:
+        raise HTTPException(status_code=404, detail="Time log not found")
+    
+    # Ownership Check
+    if log.user_id != user_id:
+        raise HTTPException(status_code=403, detail="You can only delete your own logs")
+        
+    # Task Status Check: Lock logs if task is already completed
+    task_result = await session.execute(select(Tasks).filter(Tasks.id == log.task_id))
+    task = task_result.scalars().first()
+    
+    if task and task.status.lower() == "completed":
+        raise HTTPException(status_code=400, detail="Cannot delete logs for a task that is already completed.")
+        
+    await session.delete(log)
+    await session.commit()
+    return {"message": "Log deleted successfully"}
