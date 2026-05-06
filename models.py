@@ -55,3 +55,17 @@ class TimeLogs(Base):
     task = relationship("Tasks", foreign_keys=[task_id])
     user = relationship("Users", foreign_keys=[user_id])
 
+class Notifications(Base):
+    __tablename__ = "notifications"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    title = Column(String, nullable=False)
+    message = Column(String, nullable=False)
+    type = Column(String, default="info") # task_assigned, task_completed, system
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    related_id = Column(String, nullable=True) # e.g. task_id
+
+    user = relationship("Users", foreign_keys=[user_id])
+

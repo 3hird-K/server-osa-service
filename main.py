@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from database import get_async_session, engine, Base
-from models import Users, Tasks, TimeLogs
+from models import Users, Tasks, TimeLogs, Notifications
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete
@@ -552,11 +552,25 @@ async def update_task(task_id: str, updates: dict, session: AsyncSession = Depen
      if not task:
          raise HTTPException(status_code=404, detail="Task not found")
      
+     old_assignee = task.assigned_to
      allowed_fields = ["title", "description", "status", "assigned_to", "location", "hours"]
      for field, value in updates.items():
          if field in allowed_fields:
              setattr(task, field, value)
      
+     # Notification: Task Assigned
+     if "assigned_to" in updates and updates["assigned_to"] != old_assignee and updates["assigned_to"]:
+         notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
+         new_notif = Notifications(
+             id=notif_id,
+             user_id=updates["assigned_to"],
+             title="New Task Assigned",
+             message=f"You have been assigned to: {task.title}",
+             type="task_assigned",
+             related_id=task.id
+         )
+         session.add(new_notif)
+
      await session.commit()
      return task
  
@@ -684,6 +698,18 @@ async def update_timelog(log_id: str, updates: dict, session: AsyncSession = Dep
                 # 4. Compare and Update
                 if required_hours > 0 and total_logged_hours >= (required_hours - 0.01): # Small epsilon for float math
                     task.status = "Completed"
+                    # Notification: Task Completed
+                    if task.assigned_to:
+                        notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
+                        new_notif = Notifications(
+                            id=notif_id,
+                            user_id=task.assigned_to,
+                            title="Task Completed!",
+                            message=f"Great job! Task '{task.title}' is now complete.",
+                            type="task_completed",
+                            related_id=task.id
+                        )
+                        session.add(new_notif)
                     print(f"[Auto-Complete] Task {task.id} status updated to Completed.")
         except Exception as e:
             print(f"[Auto-Complete] Error: {str(e)}")
@@ -715,3 +741,41 @@ async def delete_timelog(log_id: str, user_id: str, session: AsyncSession = Depe
     await session.delete(log)
     await session.commit()
     return {"message": "Log deleted successfully"}
+
+# --- NOTIFICATIONS ENDPOINTS ---
+
+@app.get("/users/{user_id}/notifications")
+async def get_user_notifications(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Fetch all notifications for a specific user"""
+    result = await session.execute(
+        select(Notifications)
+        .filter(Notifications.user_id == user_id)
+        .order_by(Notifications.created_at.desc())
+    )
+    return result.scalars().all()
+
+@app.patch("/notifications/{notif_id}/read")
+async def mark_notification_as_read(notif_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Mark a notification as read"""
+    result = await session.execute(select(Notifications).filter(Notifications.id == notif_id))
+    notif = result.scalars().first()
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notif.is_read = True
+    await session.commit()
+    return notif
+
+@app.post("/users/{user_id}/welcome-notification")
+async def create_welcome_notification(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Create a dummy welcome notification"""
+    notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
+    new_notif = Notifications(
+        id=notif_id,
+        user_id=user_id,
+        title="Welcome back!",
+        message="Glad to see you today! Ready to complete some tasks?",
+        type="system"
+    )
+    session.add(new_notif)
+    await session.commit()
+    return new_notif
