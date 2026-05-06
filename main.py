@@ -643,4 +643,44 @@ async def update_timelog(log_id: str, updates: dict, session: AsyncSession = Dep
             setattr(log, field, value)
     
     await session.commit()
+    await session.refresh(log)
+
+    # --- Auto-Completion Logic ---
+    # If end_time or hours are updated, check if the task should be marked as Completed
+    if "end_time" in updates or "hours" in updates:
+        try:
+            # 1. Fetch the parent task
+            task_result = await session.execute(select(Tasks).filter(Tasks.id == log.task_id))
+            task = task_result.scalars().first()
+            
+            if task and task.status != "Completed":
+                # 2. Sum all hours for this task across all logs
+                logs_result = await session.execute(select(TimeLogs).filter(TimeLogs.task_id == log.task_id))
+                all_logs = logs_result.scalars().all()
+                
+                total_logged_hours = 0.0
+                for l in all_logs:
+                    if l.hours:
+                        try:
+                            # Strip any 'h' or non-numeric chars for safe parsing
+                            h_str = str(l.hours).lower().replace('h', '').strip()
+                            total_logged_hours += float(h_str)
+                        except: pass
+                
+                # 3. Parse required hours from task definition
+                required_hours = 0.0
+                if task.hours:
+                    try:
+                        req_str = str(task.hours).lower().replace('h', '').strip()
+                        required_hours = float(req_str)
+                    except: pass
+                
+                # 4. Compare total work against requirement
+                if required_hours > 0 and total_logged_hours >= required_hours:
+                    task.status = "Completed"
+                    await session.commit()
+                    print(f"[Auto-Complete] Task {task.id} marked as Completed. ({total_logged_hours}/{required_hours} hrs)")
+        except Exception as e:
+            print(f"[Auto-Complete] Error processing task status: {str(e)}")
+
     return log
