@@ -538,6 +538,20 @@ async def create_task(task_data: dict, session: AsyncSession = Depends(get_async
              hours=task_data.get("hours")
          )
          session.add(new_task)
+
+         # Notification: Task Assigned (at creation)
+         if task_data.get("assigned_to"):
+             notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
+             new_notif = Notifications(
+                 id=notif_id,
+                 user_id=task_data.get("assigned_to"),
+                 title="New Task Assigned",
+                 message=f"You have been assigned to: {new_task.title}",
+                 type="task_assigned",
+                 related_id=new_task.id
+             )
+             session.add(new_notif)
+
          await session.commit()
          return new_task
      except Exception as e:
