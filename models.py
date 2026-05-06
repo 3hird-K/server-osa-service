@@ -36,6 +36,7 @@ class Tasks(Base):
     hours = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    assignee = relationship("Users", foreign_keys=[assigned_to])
 
 class TimeLogs(Base):
     __tablename__ = "time_logs"
