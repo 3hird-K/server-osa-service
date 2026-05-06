@@ -642,45 +642,52 @@ async def update_timelog(log_id: str, updates: dict, session: AsyncSession = Dep
         if field in allowed_fields:
             setattr(log, field, value)
     
-    await session.commit()
-    await session.refresh(log)
-
     # --- Auto-Completion Logic ---
-    # If end_time or hours are updated, check if the task should be marked as Completed
+    # We check BEFORE the final commit to include the task status update in the same transaction
     if "end_time" in updates or "hours" in updates:
         try:
             # 1. Fetch the parent task
             task_result = await session.execute(select(Tasks).filter(Tasks.id == log.task_id))
             task = task_result.scalars().first()
             
-            if task and task.status != "Completed":
+            if task and task.status.lower() != "completed":
                 # 2. Sum all hours for this task across all logs
+                # We include the CURRENT unsaved log's hours in the sum
                 logs_result = await session.execute(select(TimeLogs).filter(TimeLogs.task_id == log.task_id))
                 all_logs = logs_result.scalars().all()
                 
                 total_logged_hours = 0.0
                 for l in all_logs:
+                    # Skip the current log from the query because we have its latest value in 'log' variable
+                    if l.id == log.id: continue 
                     if l.hours:
                         try:
-                            # Strip any 'h' or non-numeric chars for safe parsing
-                            h_str = str(l.hours).lower().replace('h', '').strip()
+                            h_str = "".join(c for c in str(l.hours) if c.isdigit() or c == '.')
                             total_logged_hours += float(h_str)
                         except: pass
                 
-                # 3. Parse required hours from task definition
+                # Add the current log's updated hours
+                if log.hours:
+                    try:
+                        h_str = "".join(c for c in str(log.hours) if c.isdigit() or c == '.')
+                        total_logged_hours += float(h_str)
+                    except: pass
+
+                # 3. Parse required hours from task
                 required_hours = 0.0
                 if task.hours:
                     try:
-                        req_str = str(task.hours).lower().replace('h', '').strip()
+                        req_str = "".join(c for c in str(task.hours) if c.isdigit() or c == '.')
                         required_hours = float(req_str)
                     except: pass
                 
-                # 4. Compare total work against requirement
-                if required_hours > 0 and total_logged_hours >= required_hours:
+                # 4. Compare and Update
+                if required_hours > 0 and total_logged_hours >= (required_hours - 0.01): # Small epsilon for float math
                     task.status = "Completed"
-                    await session.commit()
-                    print(f"[Auto-Complete] Task {task.id} marked as Completed. ({total_logged_hours}/{required_hours} hrs)")
+                    print(f"[Auto-Complete] Task {task.id} status updated to Completed.")
         except Exception as e:
-            print(f"[Auto-Complete] Error processing task status: {str(e)}")
+            print(f"[Auto-Complete] Error: {str(e)}")
 
+    await session.commit()
+    await session.refresh(log)
     return log
