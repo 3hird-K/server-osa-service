@@ -779,6 +779,17 @@ async def mark_notification_as_read(notif_id: str, session: AsyncSession = Depen
     await session.commit()
     return notif
 
+@app.delete("/notifications/{notif_id}")
+async def delete_notification(notif_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Delete a single notification"""
+    result = await session.execute(select(Notifications).filter(Notifications.id == notif_id))
+    notif = result.scalars().first()
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    await session.delete(notif)
+    await session.commit()
+    return {"message": "Notification deleted successfully"}
+
 @app.post("/users/{user_id}/welcome-notification")
 async def create_welcome_notification(user_id: str, session: AsyncSession = Depends(get_async_session)):
     """Create a dummy welcome notification"""
