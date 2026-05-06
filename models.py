@@ -37,5 +37,20 @@ class Tasks(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
-    assignee = relationship("Users", foreign_keys=[assigned_to])
+class TimeLogs(Base):
+    __tablename__ = "time_logs"
+
+    id = Column(String, primary_key=True, index=True)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    date = Column(DateTime, default=datetime.datetime.utcnow)
+    start_time = Column(String, nullable=True)
+    break_time = Column(String, nullable=True)
+    back_time = Column(String, nullable=True)
+    end_time = Column(String, nullable=True)
+    hours = Column(String, nullable=True)
+    evidence_urls = Column(String, nullable=True) # Stored as JSON string
+
+    task = relationship("Tasks", foreign_keys=[task_id])
+    user = relationship("Users", foreign_keys=[user_id])
 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from database import get_async_session, engine, Base
-from models import Users, Tasks
+from models import Users, Tasks, TimeLogs
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete
@@ -571,3 +571,49 @@ async def delete_task(task_id: str, session: AsyncSession = Depends(get_async_se
      await session.delete(task)
      await session.commit()
      return {"status": "success", "message": f"Task {task_id} deleted"}
+
+# --- TIME LOGS ENDPOINTS ---
+
+@app.get("/timelogs")
+async def get_all_timelogs(session: AsyncSession = Depends(get_async_session)):
+    """Fetch all time logs with task and user details"""
+    result = await session.execute(
+        select(TimeLogs)
+        .options(selectinload(TimeLogs.task), selectinload(TimeLogs.user))
+        .order_by(TimeLogs.date.desc())
+    )
+    return result.scalars().all()
+
+@app.get("/tasks/{task_id}/logs")
+async def get_task_logs(task_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Fetch all logs for a specific task"""
+    result = await session.execute(
+        select(TimeLogs)
+        .options(selectinload(TimeLogs.task), selectinload(TimeLogs.user))
+        .filter(TimeLogs.task_id == task_id)
+        .order_by(TimeLogs.date.desc())
+    )
+    return result.scalars().all()
+
+@app.post("/timelogs")
+async def create_timelog(log_data: dict, session: AsyncSession = Depends(get_async_session)):
+    """Create a new time log record"""
+    try:
+        log_id = f"LOG-{str(uuid.uuid4())[:8].upper()}"
+        new_log = TimeLogs(
+            id=log_id,
+            task_id=log_data.get("task_id"),
+            user_id=log_data.get("user_id"),
+            start_time=log_data.get("start_time"),
+            break_time=log_data.get("break_time"),
+            back_time=log_data.get("back_time"),
+            end_time=log_data.get("end_time"),
+            hours=log_data.get("hours"),
+            evidence_urls=log_data.get("evidence_urls") # Should be JSON string
+        )
+        session.add(new_log)
+        await session.commit()
+        return new_log
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create time log: {str(e)}")
