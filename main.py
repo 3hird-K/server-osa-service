@@ -594,6 +594,17 @@ async def get_task_logs(task_id: str, session: AsyncSession = Depends(get_async_
         .order_by(TimeLogs.date.desc())
     )
     return result.scalars().all()
+ 
+@app.get("/users/{user_id}/logs")
+async def get_user_logs(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Fetch all logs for a specific user"""
+    result = await session.execute(
+        select(TimeLogs)
+        .options(selectinload(TimeLogs.task), selectinload(TimeLogs.user))
+        .filter(TimeLogs.user_id == user_id)
+        .order_by(TimeLogs.date.desc())
+    )
+    return result.scalars().all()
 
 @app.post("/timelogs")
 async def create_timelog(log_data: dict, session: AsyncSession = Depends(get_async_session)):
@@ -617,3 +628,19 @@ async def create_timelog(log_data: dict, session: AsyncSession = Depends(get_asy
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create time log: {str(e)}")
+
+@app.put("/timelogs/{log_id}")
+async def update_timelog(log_id: str, updates: dict, session: AsyncSession = Depends(get_async_session)):
+    """Update an existing time log (for break, back, end_time, etc)"""
+    result = await session.execute(select(TimeLogs).filter(TimeLogs.id == log_id))
+    log = result.scalars().first()
+    if not log:
+        raise HTTPException(status_code=404, detail="Time log not found")
+    
+    allowed_fields = ["start_time", "break_time", "back_time", "end_time", "hours", "evidence_urls"]
+    for field, value in updates.items():
+        if field in allowed_fields:
+            setattr(log, field, value)
+    
+    await session.commit()
+    return log
