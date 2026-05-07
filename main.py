@@ -12,6 +12,10 @@ from svix.webhooks import Webhook
 from clerk_backend_api import Clerk
 from fastapi.responses import HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from pydantic import BaseModel
 
     
 
@@ -951,3 +955,47 @@ async def get_dashboard_stats(session: AsyncSession = Depends(get_async_session)
     except Exception as e:
         print(f"Dashboard Stats Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch dashboard statistics")
+
+class SupportMessage(BaseModel):
+    user_id: str | None = None
+    email: str | None = None
+    message: str
+
+@app.post("/support/message")
+async def send_support_message(support: SupportMessage):
+    """Send a support message to the admin email via SMTP"""
+    admin_email = "dime.neil03@gmail.com"
+    
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASSWORD")
+    
+    if not smtp_user or not smtp_pass:
+        # If credentials are not set, we just log it and return success for the demo
+        # In production, this should be a properly configured SMTP service
+        print(f"[Support] SMTP credentials not set. Message from {support.user_id or 'Guest'}: {support.message}")
+        return {"status": "success", "message": "Support message received (Demo Mode)"}
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = smtp_user
+        msg['To'] = admin_email
+        msg['Subject'] = f"OSA Support Request - {support.user_id or 'Guest'}"
+        
+        body = f"User ID: {support.user_id or 'Not Logged In'}\n"
+        body += f"User Email: {support.email or 'Not Provided'}\n\n"
+        body += f"Message:\n{support.message}"
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+        
+        return {"status": "success", "message": "Message sent successfully"}
+    except Exception as e:
+        print(f"[Support] Email Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to send message via email")
