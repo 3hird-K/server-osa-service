@@ -861,6 +861,43 @@ async def get_dashboard_stats(session: AsyncSession = Depends(get_async_session)
         )
         staff_count = staff_count_result.scalar() or 0
 
+        # 8. Chart Data (Cumulative Growth Trend - Last 30 Days)
+        from datetime import timedelta
+        import datetime
+        thirty_days_ago = datetime.datetime.utcnow() - timedelta(days=30)
+        
+        # Get daily counts
+        daily_counts_result = await session.execute(
+            select(func.date(Users.created_at).label("date"), func.count(Users.id).label("count"))
+            .filter(Users.created_at >= thirty_days_ago)
+            .group_by(func.date(Users.created_at))
+            .order_by(func.date(Users.created_at).asc())
+        )
+        daily_counts = daily_counts_result.all()
+        
+        # Get base count (users created before 30 days ago)
+        base_count_result = await session.execute(
+            select(func.count(Users.id)).filter(Users.created_at < thirty_days_ago)
+        )
+        current_cumulative = base_count_result.scalar() or 0
+        
+        chart_data = []
+        # Create a map for quick lookup
+        counts_map = {row.date.strftime("%b %d"): row.count for row in daily_counts}
+        
+        # Fill in all 30 days to ensure a smooth line even if some days have 0 registrations
+        for i in range(30, -1, -1):
+            day_dt = datetime.datetime.utcnow() - timedelta(days=i)
+            day_str = day_dt.strftime("%b %d")
+            
+            # Add today's count to cumulative
+            current_cumulative += counts_map.get(day_str, 0)
+            
+            chart_data.append({
+                "name": day_str,
+                "users": current_cumulative
+            })
+
         return {
             "total_users": total_users,
             "total_tasks": total_tasks,
@@ -868,7 +905,8 @@ async def get_dashboard_stats(session: AsyncSession = Depends(get_async_session)
             "pending_tasks": pending_tasks,
             "total_hours": round(total_hours, 1),
             "staff_count": staff_count,
-            "recent_logs": recent_logs
+            "recent_logs": recent_logs,
+            "chart_data": chart_data
         }
     except Exception as e:
         print(f"Dashboard Stats Error: {str(e)}")
