@@ -798,9 +798,78 @@ async def create_welcome_notification(user_id: str, session: AsyncSession = Depe
         id=notif_id,
         user_id=user_id,
         title="Welcome back!",
-        message="Glad to see you today! Ready to complete some tasks?",
+        message="Glad to see you again. Check your tasks for updates.",
         type="system"
     )
     session.add(new_notif)
     await session.commit()
     return new_notif
+
+# --- DASHBOARD STATS ENDPOINT ---
+
+@app.get("/dashboard/stats")
+async def get_dashboard_stats(session: AsyncSession = Depends(get_async_session)):
+    """Fetch aggregated statistics for the dashboard"""
+    from sqlalchemy import func
+    
+    try:
+        # 1. Total Users
+        total_users_result = await session.execute(select(func.count(Users.id)))
+        total_users = total_users_result.scalar() or 0
+        
+        # 2. Total Tasks
+        total_tasks_result = await session.execute(select(func.count(Tasks.id)))
+        total_tasks = total_tasks_result.scalar() or 0
+        
+        # 3. Completed Tasks
+        completed_tasks_result = await session.execute(
+            select(func.count(Tasks.id)).filter(Tasks.status == "Completed")
+        )
+        completed_tasks = completed_tasks_result.scalar() or 0
+        
+        # 4. Pending/In Progress Tasks
+        pending_tasks_result = await session.execute(
+            select(func.count(Tasks.id)).filter(Tasks.status != "Completed")
+        )
+        pending_tasks = pending_tasks_result.scalar() or 0
+        
+        # 5. Total Hours Logged
+        logs_result = await session.execute(select(TimeLogs.hours))
+        all_hours = logs_result.scalars().all()
+        total_hours = 0.0
+        for h in all_hours:
+            if h:
+                try:
+                    # Clean string (e.g. "2h" -> 2.0)
+                    h_clean = "".join(c for c in str(h) if c.isdigit() or c == '.')
+                    if h_clean:
+                        total_hours += float(h_clean)
+                except: pass
+        
+        # 6. Recent Activity (Latest 5 logs)
+        recent_activity_result = await session.execute(
+            select(TimeLogs)
+            .options(selectinload(TimeLogs.task), selectinload(TimeLogs.user))
+            .order_by(TimeLogs.date.desc())
+            .limit(5)
+        )
+        recent_logs = recent_activity_result.scalars().all()
+        
+        # 7. Staff Count
+        staff_count_result = await session.execute(
+            select(func.count(Users.id)).filter(Users.account_type == "admin")
+        )
+        staff_count = staff_count_result.scalar() or 0
+
+        return {
+            "total_users": total_users,
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "pending_tasks": pending_tasks,
+            "total_hours": round(total_hours, 1),
+            "staff_count": staff_count,
+            "recent_logs": recent_logs
+        }
+    except Exception as e:
+        print(f"Dashboard Stats Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch dashboard statistics")
