@@ -651,6 +651,10 @@ async def create_timelog(log_data: dict, session: AsyncSession = Depends(get_asy
             evidence_urls=log_data.get("evidence_urls") # Should be JSON string
         )
         session.add(new_log)
+        
+        # --- Auto-Completion Logic ---
+        await check_task_completion(session, new_log.task_id)
+        
         await session.commit()
         return new_log
     except Exception as e:
@@ -671,66 +675,74 @@ async def update_timelog(log_id: str, updates: dict, session: AsyncSession = Dep
             setattr(log, field, value)
     
     # --- Auto-Completion Logic ---
-    # We check BEFORE the final commit to include the task status update in the same transaction
     if "end_time" in updates or "hours" in updates:
-        try:
-            # 1. Fetch the parent task
-            task_result = await session.execute(select(Tasks).filter(Tasks.id == log.task_id))
-            task = task_result.scalars().first()
-            
-            if task and task.status.lower() != "completed":
-                # 2. Sum all hours for this task across all logs
-                # We include the CURRENT unsaved log's hours in the sum
-                logs_result = await session.execute(select(TimeLogs).filter(TimeLogs.task_id == log.task_id))
-                all_logs = logs_result.scalars().all()
-                
-                total_logged_hours = 0.0
-                for l in all_logs:
-                    # Skip the current log from the query because we have its latest value in 'log' variable
-                    if l.id == log.id: continue 
-                    if l.hours:
-                        try:
-                            h_str = "".join(c for c in str(l.hours) if c.isdigit() or c == '.')
-                            total_logged_hours += float(h_str)
-                        except: pass
-                
-                # Add the current log's updated hours
-                if log.hours:
-                    try:
-                        h_str = "".join(c for c in str(log.hours) if c.isdigit() or c == '.')
-                        total_logged_hours += float(h_str)
-                    except: pass
-
-                # 3. Parse required hours from task
-                required_hours = 0.0
-                if task.hours:
-                    try:
-                        req_str = "".join(c for c in str(task.hours) if c.isdigit() or c == '.')
-                        required_hours = float(req_str)
-                    except: pass
-                
-                # 4. Compare and Update
-                if required_hours > 0 and total_logged_hours >= (required_hours - 0.01): # Small epsilon for float math
-                    task.status = "Completed"
-                    # Notification: Task Completed
-                    if task.assigned_to:
-                        notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
-                        new_notif = Notifications(
-                            id=notif_id,
-                            user_id=task.assigned_to,
-                            title="Task Completed!",
-                            message=f"Great job! Task '{task.title}' is now complete.",
-                            type="task_completed",
-                            related_id=task.id
-                        )
-                        session.add(new_notif)
-                    print(f"[Auto-Complete] Task {task.id} status updated to Completed.")
-        except Exception as e:
-            print(f"[Auto-Complete] Error: {str(e)}")
+        await check_task_completion(session, log.task_id)
 
     await session.commit()
     await session.refresh(log)
     return log
+
+
+async def check_task_completion(session: AsyncSession, task_id: str):
+    """
+    Helper function to check if a task's logged hours meet or exceed its required hours.
+    If they do, it marks the task as 'Completed' and sends a notification.
+    """
+    try:
+        # 1. Fetch the task
+        task_result = await session.execute(select(Tasks).filter(Tasks.id == task_id))
+        task = task_result.scalars().first()
+        
+        if not task or task.status.lower() == "completed":
+            return
+
+        # 2. Sum all hours for this task across all logs
+        logs_result = await session.execute(select(TimeLogs).filter(TimeLogs.task_id == task_id))
+        all_logs = logs_result.scalars().all()
+        
+        total_logged_hours = 0.0
+        for l in all_logs:
+            if l.hours:
+                try:
+                    # Clean string (remove 'h', etc) and convert to float
+                    h_str = "".join(c for c in str(l.hours) if c.isdigit() or c == '.')
+                    if h_str:
+                        total_logged_hours += float(h_str)
+                except Exception as e:
+                    print(f"[Auto-Complete] Error parsing log hours '{l.hours}': {e}")
+        
+        # 3. Parse required hours from task
+        required_hours = 0.0
+        if task.hours:
+            try:
+                req_str = "".join(c for c in str(task.hours) if c.isdigit() or c == '.')
+                if req_str:
+                    required_hours = float(req_str)
+            except Exception as e:
+                print(f"[Auto-Complete] Error parsing task required hours '{task.hours}': {e}")
+        
+        # 4. Compare and Update
+        print(f"[Auto-Complete] Task {task_id}: Logged={total_logged_hours}, Required={required_hours}")
+        
+        if required_hours > 0 and total_logged_hours >= (required_hours - 0.01):
+            task.status = "Completed"
+            
+            # Notification: Task Completed
+            if task.assigned_to:
+                notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
+                new_notif = Notifications(
+                    id=notif_id,
+                    user_id=task.assigned_to,
+                    title="Task Completed!",
+                    message=f"Great job! Task '{task.title}' is now complete.",
+                    type="task_completed",
+                    related_id=task.id
+                )
+                session.add(new_notif)
+            print(f"[Auto-Complete] Task {task.id} marked as Completed.")
+            
+    except Exception as e:
+        print(f"[Auto-Complete] Critical Error: {str(e)}")
 
 @app.delete("/timelogs/{log_id}")
 async def delete_timelog(log_id: str, user_id: str, session: AsyncSession = Depends(get_async_session)):
