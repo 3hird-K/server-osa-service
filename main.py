@@ -861,41 +861,69 @@ async def get_dashboard_stats(session: AsyncSession = Depends(get_async_session)
         )
         staff_count = staff_count_result.scalar() or 0
 
-        # 8. Chart Data (Cumulative Growth Trend - Last 30 Days)
+        # 8. Chart Data (Multi-Variable Trend - Last 30 Days)
         from datetime import timedelta
         import datetime
         thirty_days_ago = datetime.datetime.utcnow() - timedelta(days=30)
         
-        # Get daily counts
-        daily_counts_result = await session.execute(
+        # A. Users Daily counts
+        users_daily_result = await session.execute(
             select(func.date(Users.created_at).label("date"), func.count(Users.id).label("count"))
             .filter(Users.created_at >= thirty_days_ago)
             .group_by(func.date(Users.created_at))
-            .order_by(func.date(Users.created_at).asc())
         )
-        daily_counts = daily_counts_result.all()
+        users_counts_map = {row.date.strftime("%b %d"): row.count for row in users_daily_result.all()}
         
-        # Get base count (users created before 30 days ago)
-        base_count_result = await session.execute(
-            select(func.count(Users.id)).filter(Users.created_at < thirty_days_ago)
+        # B. Tasks Daily counts (Completed only)
+        tasks_daily_result = await session.execute(
+            select(func.date(Tasks.updated_at).label("date"), func.count(Tasks.id).label("count"))
+            .filter(Tasks.updated_at >= thirty_days_ago, Tasks.status == "Completed")
+            .group_by(func.date(Tasks.updated_at))
         )
-        current_cumulative = base_count_result.scalar() or 0
+        tasks_counts_map = {row.date.strftime("%b %d"): row.count for row in tasks_daily_result.all()}
+        
+        # C. Hours Daily counts
+        hours_daily_result = await session.execute(
+            select(func.date(TimeLogs.date).label("date"), TimeLogs.hours)
+            .filter(TimeLogs.date >= thirty_days_ago)
+        )
+        hours_logs = hours_daily_result.all()
+        hours_counts_map = {}
+        for row in hours_logs:
+            d_str = row.date.strftime("%b %d")
+            try:
+                h_val = float("".join(c for c in str(row.hours) if c.isdigit() or c == '.'))
+                hours_counts_map[d_str] = hours_counts_map.get(d_str, 0.0) + h_val
+            except: pass
+
+        # Get base counts (before 30 days ago)
+        base_users = (await session.execute(select(func.count(Users.id)).filter(Users.created_at < thirty_days_ago))).scalar() or 0
+        base_tasks = (await session.execute(select(func.count(Tasks.id)).filter(Tasks.updated_at < thirty_days_ago, Tasks.status == "Completed"))).scalar() or 0
+        
+        base_hours_result = await session.execute(select(TimeLogs.hours).filter(TimeLogs.date < thirty_days_ago))
+        base_hours = 0.0
+        for h in base_hours_result.scalars().all():
+            try: base_hours += float("".join(c for c in str(h) if c.isdigit() or c == '.'))
+            except: pass
         
         chart_data = []
-        # Create a map for quick lookup
-        counts_map = {row.date.strftime("%b %d"): row.count for row in daily_counts}
+        cum_users = base_users
+        cum_tasks = base_tasks
+        cum_hours = base_hours
         
-        # Fill in all 30 days to ensure a smooth line even if some days have 0 registrations
         for i in range(30, -1, -1):
             day_dt = datetime.datetime.utcnow() - timedelta(days=i)
             day_str = day_dt.strftime("%b %d")
             
-            # Add today's count to cumulative
-            current_cumulative += counts_map.get(day_str, 0)
+            cum_users += users_counts_map.get(day_str, 0)
+            cum_tasks += tasks_counts_map.get(day_str, 0)
+            cum_hours += hours_counts_map.get(day_str, 0.0)
             
             chart_data.append({
                 "name": day_str,
-                "users": current_cumulative
+                "users": cum_users,
+                "tasks": cum_tasks,
+                "hours": round(cum_hours, 1)
             })
 
         return {
