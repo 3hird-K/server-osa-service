@@ -46,7 +46,6 @@ clerk = Clerk(bearer_auth=os.getenv("CLERK_SECRET_KEY"))
 
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
-    # 1. Get the standard UI HTML
     response = get_swagger_ui_html(
         openapi_url=app.openapi_url,
         title=app.title + " - Swagger UI",
@@ -66,7 +65,6 @@ async def custom_swagger_ui_html():
         .swagger-ui .info .title { color: #f97316 !important; }
         .swagger-ui .opblock-tag { color: #eeeeee !important; border-bottom: 1px solid #18181b !important; }
         
-        /* Fix the "Internal" Section Headers (Parameters, Responses, etc.) */
         .swagger-ui .opblock-section-header { 
             background: #18181b !important; 
             color: #ffffff !important; 
@@ -237,7 +235,6 @@ async def get_students(session: AsyncSession = Depends(get_async_session)):
     import datetime
     from sqlalchemy import update
     
-    # Silent background cleanup
     two_minutes_ago = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
     await session.execute(
         update(Users)
@@ -257,7 +254,6 @@ async def get_admins(session: AsyncSession = Depends(get_async_session)):
     import datetime
     from sqlalchemy import update
     
-    # Silent background cleanup
     two_minutes_ago = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
     await session.execute(
         update(Users)
@@ -288,10 +284,8 @@ async def update_user(user_id: str, updates: dict, session: AsyncSession = Depen
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Update allowed fields
     allowed_fields = ["firstname", "lastname", "account_type", "avatar_url"]
     
-    # Validate account_type if being updated
     if "account_type" in updates:
         if updates["account_type"] not in ["student", "admin"]:
             raise HTTPException(status_code=400, detail="account_type must be 'student' or 'admin'")
@@ -316,8 +310,6 @@ async def user_heartbeat(user_id: str, session: AsyncSession = Depends(get_async
     user.is_online = True
     user.last_active = datetime.datetime.utcnow()
     
-    # Optional: Mark others as offline if they haven't pinged in 2 minutes
-    # This keeps the "green dots" accurate across the whole system
     two_minutes_ago = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
     from sqlalchemy import update
     await session.execute(
@@ -401,22 +393,18 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
     event_type = event["type"]
     data = event["data"]
 
-    # Get Clerk user_id (e.g., user_3C17_Vez9Mfa5)
     user_id = data.get("id")
     first_name = data.get("first_name", "")
     last_name = data.get("last_name", "")
     avatar_url = data.get("image_url", "")
     username = data.get("username")  
 
-    # Extract public_metadata for account_type/role
     public_metadata = data.get("public_metadata", {})
     account_type = public_metadata.get("role", "student")
 
-    # Validate account_type
     if account_type not in ["student", "admin"]:
         account_type = "student"
 
-    # Extract email
     email = None
     email_addresses = data.get("email_addresses", [])
     for email_obj in email_addresses:
@@ -431,7 +419,6 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
 
     if event_type == "user.created":
         try:
-            # Generate username fallback if not provided
             username_value = username
             if not username_value and email:
                 username_value = email.split("@")[0]
@@ -445,7 +432,7 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
                 email=email,
                 avatar_url=avatar_url,
                 username=username_value,
-                account_type=account_type,  # From Clerk public_metadata or default "student"
+                account_type=account_type,  
             )
 
             session.add(new_user)
@@ -471,7 +458,7 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
                 existing_user.avatar_url = avatar_url
                 if username:
                     existing_user.username = username
-                existing_user.account_type = account_type  # Update from Clerk public_metadata
+                existing_user.account_type = account_type  
 
                 await session.commit()
                 print(f"User updated in Neon DB: {user_id}")
@@ -505,7 +492,6 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
     return {"message": f"Webhook processed - event: {event_type}"}
  
  
- # --- TASK CRUD ENDPOINTS ---
  
 @app.get("/tasks")
 async def get_all_tasks(session: AsyncSession = Depends(get_async_session)):
@@ -543,7 +529,6 @@ async def create_task(task_data: dict, session: AsyncSession = Depends(get_async
          )
          session.add(new_task)
 
-         # Notification: Task Assigned (at creation)
          if task_data.get("assigned_to"):
              notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
              new_notif = Notifications(
@@ -576,7 +561,6 @@ async def update_task(task_id: str, updates: dict, session: AsyncSession = Depen
          if field in allowed_fields:
              setattr(task, field, value)
      
-     # Notification: Task Assigned
      if "assigned_to" in updates and updates["assigned_to"] != old_assignee and updates["assigned_to"]:
          notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
          new_notif = Notifications(
@@ -700,7 +684,6 @@ async def check_task_completion(session: AsyncSession, task_id: str):
         if not task or task.status.lower() == "completed":
             return
 
-        # 2. Sum all hours for this task across all logs
         logs_result = await session.execute(select(TimeLogs).filter(TimeLogs.task_id == task_id))
         all_logs = logs_result.scalars().all()
         
@@ -708,7 +691,6 @@ async def check_task_completion(session: AsyncSession, task_id: str):
         for l in all_logs:
             if l.hours:
                 try:
-                    # Clean string (remove 'h', etc) and convert to float
                     h_str = "".join(c for c in str(l.hours) if c.isdigit() or c == '.')
                     if h_str:
                         total_logged_hours += float(h_str)
@@ -731,7 +713,6 @@ async def check_task_completion(session: AsyncSession, task_id: str):
         if required_hours > 0 and total_logged_hours >= (required_hours - 0.01):
             task.status = "Completed"
             
-            # Notification: Task Completed
             if task.assigned_to:
                 notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
                 new_notif = Notifications(
@@ -972,8 +953,6 @@ async def send_support_message(support: SupportMessage):
     smtp_pass = os.getenv("SMTP_PASSWORD")
     
     if not smtp_user or not smtp_pass:
-        # If credentials are not set, we just log it and return success for the demo
-        # In production, this should be a properly configured SMTP service
         print(f"[Support] SMTP credentials not set. Message from {support.user_id or 'Guest'}: {support.message}")
         return {"status": "success", "message": "Support message received (Demo Mode)"}
 
