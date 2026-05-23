@@ -954,7 +954,7 @@ async def send_support_message(support: SupportMessage):
     
     if not smtp_user or not smtp_pass:
         print(f"[Support] SMTP credentials not set. Message from {support.user_id or 'Guest'}: {support.message}")
-        return {"status": "success", "message": "Support message received (Demo Mode)"}
+        return {"status": "success", "message": "Support message received"}
 
     try:
         msg = MIMEMultipart()
