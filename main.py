@@ -365,6 +365,111 @@ async def update_profile(user_id: str, updates: dict, session: AsyncSession = De
     return user
 
 
+@app.delete("/profiles/{user_id}")
+async def delete_profile(user_id: str, session: AsyncSession = Depends(get_async_session)):
+    """Delete a user profile from Neon DB"""
+    result = await session.execute(select(Users).filter(Users.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Delete related time logs
+    await session.execute(delete(TimeLogs).where(TimeLogs.user_id == user_id))
+    # Delete related notifications
+    await session.execute(delete(Notifications).where(Notifications.user_id == user_id))
+    
+    await session.delete(user)
+    await session.commit()
+    return {"status": "success", "message": f"User {user_id} deleted"}
+
+
+# --- ADMIN ENDPOINTS ---
+
+class AdminUpdateRequest(BaseModel):
+    adminId: str
+    targetUserId: str
+    firstName: str | None = None
+    lastName: str | None = None
+    account_type: str | None = None
+
+class AdminDeleteRequest(BaseModel):
+    adminId: str
+    targetUserId: str
+
+@app.post("/api/admin/update-user")
+async def admin_update_user(payload: AdminUpdateRequest, session: AsyncSession = Depends(get_async_session)):
+    """Admin endpoint to update a user's profile (with admin verification)"""
+    # Verify the caller is an admin
+    admin_result = await session.execute(select(Users).filter(Users.id == payload.adminId))
+    admin_user = admin_result.scalars().first()
+    if not admin_user or admin_user.account_type.lower() != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can update users")
+
+    # Fetch the target user
+    target_result = await session.execute(select(Users).filter(Users.id == payload.targetUserId))
+    target_user = target_result.scalars().first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    # Update fields
+    if payload.firstName is not None:
+        target_user.firstname = payload.firstName
+    if payload.lastName is not None:
+        target_user.lastname = payload.lastName
+    if payload.account_type is not None:
+        if payload.account_type not in ["student", "admin"]:
+            raise HTTPException(status_code=400, detail="account_type must be 'student' or 'admin'")
+        target_user.account_type = payload.account_type
+
+    # Also update in Clerk
+    try:
+        update_params = {}
+        if payload.firstName is not None:
+            update_params["first_name"] = payload.firstName
+        if payload.lastName is not None:
+            update_params["last_name"] = payload.lastName
+        if update_params:
+            clerk.users.update(user_id=payload.targetUserId, **update_params)
+    except Exception as e:
+        print(f"Clerk update warning: {e}")
+
+    await session.commit()
+    return {"success": True}
+
+
+@app.delete("/api/admin/delete-user")
+async def admin_delete_user(payload: AdminDeleteRequest, session: AsyncSession = Depends(get_async_session)):
+    """Admin endpoint to delete a user (with admin verification)"""
+    # Verify the caller is an admin
+    admin_result = await session.execute(select(Users).filter(Users.id == payload.adminId))
+    admin_user = admin_result.scalars().first()
+    if not admin_user or admin_user.account_type.lower() != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete users")
+
+    # Cannot delete yourself
+    if payload.adminId == payload.targetUserId:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
+    # Fetch the target user
+    target_result = await session.execute(select(Users).filter(Users.id == payload.targetUserId))
+    target_user = target_result.scalars().first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    # Delete from Clerk
+    try:
+        clerk.users.delete(user_id=payload.targetUserId)
+    except Exception as e:
+        print(f"Clerk delete warning: {e}")
+
+    # Delete related data from DB
+    await session.execute(delete(TimeLogs).where(TimeLogs.user_id == payload.targetUserId))
+    await session.execute(delete(Notifications).where(Notifications.user_id == payload.targetUserId))
+    await session.delete(target_user)
+    await session.commit()
+    return {"success": True}
+
+
 @app.post("/api/webhooks/clerk")
 async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_async_session)):
 
@@ -393,18 +498,22 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
     event_type = event["type"]
     data = event["data"]
 
+    # Get Clerk user_id (e.g., user_3C17_Vez9Mfa5)
     user_id = data.get("id")
     first_name = data.get("first_name", "")
     last_name = data.get("last_name", "")
     avatar_url = data.get("image_url", "")
     username = data.get("username")  
 
+    # Extract public_metadata for account_type/role
     public_metadata = data.get("public_metadata", {})
     account_type = public_metadata.get("role", "student")
 
+    # Validate account_type
     if account_type not in ["student", "admin"]:
         account_type = "student"
 
+    # Extract email
     email = None
     email_addresses = data.get("email_addresses", [])
     for email_obj in email_addresses:
@@ -419,6 +528,7 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
 
     if event_type == "user.created":
         try:
+            # Generate username fallback if not provided
             username_value = username
             if not username_value and email:
                 username_value = email.split("@")[0]
@@ -432,7 +542,7 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
                 email=email,
                 avatar_url=avatar_url,
                 username=username_value,
-                account_type=account_type,  
+                account_type=account_type,  # From Clerk public_metadata or default "student"
             )
 
             session.add(new_user)
@@ -458,7 +568,7 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
                 existing_user.avatar_url = avatar_url
                 if username:
                     existing_user.username = username
-                existing_user.account_type = account_type  
+                existing_user.account_type = account_type  # Update from Clerk public_metadata
 
                 await session.commit()
                 print(f"User updated in Neon DB: {user_id}")
@@ -492,6 +602,7 @@ async def clerk_webhook(request: Request, session: AsyncSession = Depends(get_as
     return {"message": f"Webhook processed - event: {event_type}"}
  
  
+ # --- TASK CRUD ENDPOINTS ---
  
 @app.get("/tasks")
 async def get_all_tasks(session: AsyncSession = Depends(get_async_session)):
@@ -529,6 +640,7 @@ async def create_task(task_data: dict, session: AsyncSession = Depends(get_async
          )
          session.add(new_task)
 
+         # Notification: Task Assigned (at creation)
          if task_data.get("assigned_to"):
              notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
              new_notif = Notifications(
@@ -561,6 +673,7 @@ async def update_task(task_id: str, updates: dict, session: AsyncSession = Depen
          if field in allowed_fields:
              setattr(task, field, value)
      
+     # Notification: Task Assigned
      if "assigned_to" in updates and updates["assigned_to"] != old_assignee and updates["assigned_to"]:
          notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
          new_notif = Notifications(
@@ -684,6 +797,7 @@ async def check_task_completion(session: AsyncSession, task_id: str):
         if not task or task.status.lower() == "completed":
             return
 
+        # 2. Sum all hours for this task across all logs
         logs_result = await session.execute(select(TimeLogs).filter(TimeLogs.task_id == task_id))
         all_logs = logs_result.scalars().all()
         
@@ -691,6 +805,7 @@ async def check_task_completion(session: AsyncSession, task_id: str):
         for l in all_logs:
             if l.hours:
                 try:
+                    # Clean string (remove 'h', etc) and convert to float
                     h_str = "".join(c for c in str(l.hours) if c.isdigit() or c == '.')
                     if h_str:
                         total_logged_hours += float(h_str)
@@ -713,6 +828,7 @@ async def check_task_completion(session: AsyncSession, task_id: str):
         if required_hours > 0 and total_logged_hours >= (required_hours - 0.01):
             task.status = "Completed"
             
+            # Notification: Task Completed
             if task.assigned_to:
                 notif_id = f"NTF-{str(uuid.uuid4())[:8].upper()}"
                 new_notif = Notifications(
@@ -953,8 +1069,10 @@ async def send_support_message(support: SupportMessage):
     smtp_pass = os.getenv("SMTP_PASSWORD")
     
     if not smtp_user or not smtp_pass:
+        # If credentials are not set, we just log it and return success for the demo
+        # In production, this should be a properly configured SMTP service
         print(f"[Support] SMTP credentials not set. Message from {support.user_id or 'Guest'}: {support.message}")
-        return {"status": "success", "message": "Support message received"}
+        return {"status": "success", "message": "Support message received (Demo Mode)"}
 
     try:
         msg = MIMEMultipart()
